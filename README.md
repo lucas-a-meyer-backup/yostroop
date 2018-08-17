@@ -1,3 +1,3 @@
-# yostroop
+# Yo, Stroopwafel
 
-This was done when I couldn't sleep
+This was done when I couldn't sleep.
