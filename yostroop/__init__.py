@@ -57,7 +57,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         log(f"Received {message}")
         channel = event.get('channel')
         if (user is not None) and (message.find(":stroopwafel:") >= 0):
-            r = bot_answer(channel, f"user {user} said something about stroopwafels - check it out!")
+            r = bot_answer(channel, f"user {user} said something about stroopwafels - check it out...")
             return func.HttpResponse (r._body, status_code = r.status)
         else   
             return func.HttpResponse ("", status_code = 0)
