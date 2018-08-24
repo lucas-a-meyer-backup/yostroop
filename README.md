@@ -5,7 +5,7 @@ It was developed using Python, Azure Functions v2.0 and Cosmos DB.
 
 ## What it does
 
-After you install, the bot listens to public channels in your Slack workspace. Whenever someone writes a message that contains the string `:stroopwafel:`, the bot will parse the message looking for mentions, and will record that each of the mentioned users got a stroopwafel. At the end of the month (still in development) the bot will communicate the leaderboard - who received the most stroopwafels. Note that the string `:stroopwafel:` represents an emoji as it's between `:`. Our slack workspace uses a custom emoji for `:stroopwafel:.
+After you install, the bot listens to public channels in your Slack workspace. Whenever someone writes a message that contains the string `:stroopwafel:`, the bot will parse the message looking for mentions, and will record that each of the mentioned users got a stroopwafel. At the end of the month (still in development) the bot will communicate the leaderboard - who received the most stroopwafels. Note that the string `:stroopwafel:` represents an emoji as it's between `:`. Our slack workspace uses a custom emoji for `:stroopwafel:`.
 
 ## Installation
 
