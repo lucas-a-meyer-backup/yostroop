@@ -19,4 +19,4 @@ After you install, the bot listens to public channels in your Slack workspace. W
 
 ## Architecture and development
 
-Please see [here](https://meyerperin.com/post/yo-stroopwafel/)
+Please see [here](https://meyerperin.com/post/yo-stroopwafel/) for more information.
