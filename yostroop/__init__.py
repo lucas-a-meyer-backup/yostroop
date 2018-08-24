@@ -32,6 +32,7 @@ def post_to_slack_channel (auth_token, message, channel):
     
     return(r)
 
+
 def get_username_from_userid (auth_token, userid):
     """
     Uses the Slack API to convert the User IDs to user names.
@@ -57,6 +58,7 @@ def get_username_from_userid (auth_token, userid):
     else:
         return None
 
+
 def get_cosmosdb_connection() -> document_client.DocumentClient:
     host = os.environ["YOSTROOP_DB_HOST"]
     key = os.environ["YOSTROOP_DB_KEY"]
@@ -68,6 +70,7 @@ def get_cosmosdb_connection() -> document_client.DocumentClient:
 
     return client, coll_string
 
+
 def send_document_cosmosdb(payload):
     """
     Uploads JSON document `payload` to Yostroop's COSMOS DB
@@ -75,7 +78,8 @@ def send_document_cosmosdb(payload):
     client, coll_string = get_cosmosdb_connection()
     client.CreateDocument(coll_string, payload)
 
-def log_gift(sender, receiver):
+
+def log_gift(team, sender, receiver):
     """ 
     Creates and uploads a document of type gift to Yostroop's Cosmos DB
     """
@@ -83,22 +87,25 @@ def log_gift(sender, receiver):
     gift = { 
              "type":"gift",
              "timestamp": str(datetime.utcnow()),
+             "team": team,
              "sender": sender,
              "receiver": receiver 
             }
 
     send_document_cosmosdb(gift)
   
+
 def debug_log_event (event):
     """
     Uploads a document of type `event` to Yostroop's Cosmos DB
     """
     data = { 
-             "type":"event",
+             "type":"yostroop call",
              "event": event,
              "timestamp": str(datetime.utcnow())
             }
     send_document_cosmosdb(data)
+
 
 def debug_log_error (err):
     """
@@ -111,10 +118,12 @@ def debug_log_error (err):
             }
     send_document_cosmosdb(data)
 
+
 def install_client(data):
     logging.warning("Installing new client:")
     logging.warning(data)
     send_document_cosmosdb(data)
+
 
 def list_gift_recipients(auth_token, gift_message):
     """
@@ -130,7 +139,8 @@ def list_gift_recipients(auth_token, gift_message):
     recipient_ids = re.findall("<@(.*?)>", gift_message)
     return [get_username_from_userid(auth_token, uid) for uid in recipient_ids]
 
-def handle_slack_event(auth_token, event) -> func.HttpResponse:
+
+def handle_slack_event(auth_token, team, event) -> func.HttpResponse:
     """
     Handles an object of the `event` type from Slack.
     For now, assumes all events are of type `message`. 
@@ -144,11 +154,6 @@ def handle_slack_event(auth_token, event) -> func.HttpResponse:
     message = event.get('text')
     channel = event.get('channel')
 
-    logging.info(f"Debug level = {os.environ['YOSTROOP_DEBUG_LEVEL']}")
-
-    if os.environ['YOSTROOP_DEBUG_LEVEL'] == "1":
-        debug_log_event(event)
-
     if (sender_id is not None) and (message.find(":stroopwafel:") >= 0):
         
         recipient_names = list_gift_recipients(auth_token, message)
@@ -158,7 +163,7 @@ def handle_slack_event(auth_token, event) -> func.HttpResponse:
         # Save the gifts to the database:
         for recipient in recipient_names:
             if recipient:
-                log_gift(sender, recipient)
+                log_gift(team, sender, recipient)
                 recipient_count = recipient_count + 1
 
         if recipient_count <= 0:
@@ -171,6 +176,7 @@ def handle_slack_event(auth_token, event) -> func.HttpResponse:
     else:
         return func.HttpResponse ("OK", status_code = 200)
 
+
 def handle_bad_request(req) -> func.HttpResponse:
     """
     Helper function to provide error messages and logging in case of a bad request
@@ -179,6 +185,7 @@ def handle_bad_request(req) -> func.HttpResponse:
         debug_log_error(req)
     logging.warning("Bad request received: will handle by returning 400 Bad Request")
     return func.HttpResponse("Bad Request: I don't know how to handle that request.", status_code = 400)
+
 
 def handle_oauth(code):
     urllib3.disable_warnings()
@@ -198,7 +205,8 @@ def handle_oauth(code):
     if r.status == 200:
         body = json.loads(r._body)
         install_client(body)
-        return func.HttpResponse (f"Installed new client", status_code = 200)
+        return func.HttpResponse (f"Installed new client", status_code = 302, 
+            headers={"location":"https://github.com/RealLucasMeyer/yostroop/blob/master/InstallationComplete.md"})
     else:
         logging.error("Error in OAUTH")
         logging.error(r)
@@ -230,6 +238,7 @@ def get_team_key(team):
 
     return auth_key
 
+
 def main(req: func.HttpRequest) -> func.HttpResponse:
     """
     Expects an object of type azure.functions.HttpRequest containing a JSON object.
@@ -243,23 +252,29 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     """    
 
     logging.info("YoStroop was triggered.")
+    logging.info(f"Debug level = {os.environ['YOSTROOP_DEBUG_LEVEL']}")
 
     # Let's see if this was an OAUTH request - if so we handle it
     code = req.params.get("code")
     if code:
-        logging.warning(f"Params: {req.params}")
-        logging.warning(f"Code:{code}")
+        logging.info(f"Registration attempt with params: {req.params}")
         return handle_oauth(code)
 
     # The request comes in a JSON
     try:
         req_body = req.get_json()        
     except ValueError:
-        logging.warning(f"Not JSON: {req}")
+        logging.warning(f"Received something that was not JSON: {req}")
         return handle_bad_request(req)
 
+    # If we're in debug mode, let's log what we were called with
     if os.environ['YOSTROOP_DEBUG_LEVEL'] == "1":
         debug_log_event(req_body)
+
+    # If we got a JSON, let's see if it's a challenge. If it is, we answer and exit.
+    challenge = req_body.get("challenge")
+    if challenge:
+        return func.HttpResponse (f"{challenge}", status_code = 200)
 
     # Let's determine from which team this trigger is coming
     team = req_body.get("team_id")
@@ -269,14 +284,11 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         logging.error(f"No team_id found in {req}")
         return handle_bad_request(req)
 
-
-    # Dictionary.get returns None if the key does not exist
-    challenge = req_body.get("challenge")
+    # Let's make sure we got an event
     event = req_body.get("event")
 
-    if challenge:
-        return func.HttpResponse (f"{challenge}", status_code = 200)
-    elif event:
-        return handle_slack_event(auth_token, event)
+    # If we got here, we really have an event, let's handle it
+    if event:
+        return handle_slack_event(auth_token, team, event)
     else:
         return handle_bad_request(req)
