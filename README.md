@@ -9,7 +9,7 @@ After you install, the bot listens to public channels in your Slack workspace. W
 
 ## Installation
 
-<a href="https://slack.com/oauth/authorize?scope=channels:history%20users.profile:read%20chat:write&client_id=412513733287.419967497237"><img alt="Add to Slack" height="40" width="139" src="https://platform.slack-edge.com/img/add_to_slack.png" srcset="https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x" /></a>
+<a href="https://slack.com/oauth/authorize?client_id=412513733287.419967497237&scope=channels:history,users.profile:read,chat:write"><img alt="Add to Slack" height="40" width="139" src="https://platform.slack-edge.com/img/add_to_slack.png" srcset="https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x" /></a>
 
 ## Future work
 
