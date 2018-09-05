@@ -7,6 +7,7 @@ import urllib3
 import azure.functions as func
 import pydocumentdb
 import pydocumentdb.document_client as document_client
+import pydocumentdb.errors as errors
 import re
 from datetime import datetime
 
@@ -39,6 +40,8 @@ def get_username_from_userid (auth_token, userid):
     Returns a string containing the displayname for the given Slack User ID
     """
 
+    logging.info(f"Attempting to transform userid {userid} into a username")
+    logging.info(f"Using token {auth_token}")
     urllib3.disable_warnings()
     http = urllib3.PoolManager()
     r = http.request(
@@ -54,8 +57,10 @@ def get_username_from_userid (auth_token, userid):
             name = profile.get("display_name")
         else:
             name = None
+        logging.info(f"The result was {r.status} and the name I found was: {name}")
         return name
     else:
+        logging.warn(f"Something went wrong: {r.status}")
         return None
 
 
@@ -75,30 +80,67 @@ def send_document_cosmosdb(payload):
     """
     Uploads JSON document `payload` to Yostroop's COSMOS DB
     """
+    logging.info(f"Uploading document to Cosmos DB")
+
     client, coll_string = get_cosmosdb_connection()
     client.CreateDocument(coll_string, payload)
 
+def find_gift(team, sender, receiver, client_msg_id):
+    logging.info(f"Trying to find if a gift already exists for client_msg_id {client_msg_id}")
 
-def log_gift(team, sender, receiver):
+    client, coll_string = get_cosmosdb_connection()
+    logging.info(f"Client: {client}, String: {coll_string}")
+
+    options = { 'enableCrossPartitionQuery': True }
+    logging.info(options)
+
+    query_str = f"select * from c where c.type = 'gift' and c.sender = '{sender}' and c.receiver = '{receiver}' and c.client_msg_id = '{client_msg_id}'"
+    sql_query = {"query" : query_str }
+    logging.info(sql_query)
+
+    logging.info("Trying to query the database")
+    try:
+        results = list(client.QueryDocuments(coll_string, sql_query, options))
+        if len(results) > 0:
+            logging.info(f"Found {len(results)} results.")
+            return True
+        else:
+            logging.info(f"Found {len(results)} results.")
+            return False
+    except Exception as e:
+        logging.error(e)
+        return False
+
+def log_gift(team, sender, receiver, client_msg_id):
     """ 
     Creates and uploads a document of type gift to Yostroop's Cosmos DB
     """
+
+    logging.info (f"Logging a gift from {sender} to {receiver} for client_msg_id {client_msg_id}")
+
+    if find_gift(team, sender, receiver, client_msg_id):
+        return 0
 
     gift = { 
              "type":"gift",
              "timestamp": str(datetime.utcnow()),
              "team": team,
              "sender": sender,
-             "receiver": receiver 
+             "receiver": receiver,
+             "client_msg_id": client_msg_id
             }
 
     send_document_cosmosdb(gift)
+
+    return 1
   
 
 def debug_log_event (event):
     """
     Uploads a document of type `event` to Yostroop's Cosmos DB
     """
+    logging.info(f"Uploading event to database")
+    logging.info(f"{event}")
     data = { 
              "type":"yostroop call",
              "event": event,
@@ -149,13 +191,17 @@ def handle_slack_event(auth_token, team, event) -> func.HttpResponse:
     If the message contains a :stroopwafel: gift, we'll log it 
     to the database.
     """
+    logging.info(f"Handling slack team {team} event:{event}")
 
     sender_id = event.get('user')
     message = event.get('text')
     channel = event.get('channel')
+    client_msg_id = event.get('client_msg_id')
+    subtype = event.get('subtype', "")
 
-    if (sender_id is not None) and (message.find(":stroopwafel:") >= 0):
+    if (sender_id is not None) and (message.find(":stroopwafel:") >= 0) and (subtype != "message_deleted"):
         
+        logging.info("We're in a stroopwafel message!")
         recipient_names = list_gift_recipients(auth_token, message)
         sender = get_username_from_userid (auth_token, sender_id)
 
@@ -163,8 +209,9 @@ def handle_slack_event(auth_token, team, event) -> func.HttpResponse:
         # Save the gifts to the database:
         for recipient in recipient_names:
             if recipient:
-                log_gift(team, sender, recipient)
-                recipient_count = recipient_count + 1
+                logging.info(f"Found recipient {recipient}, will log a gift")
+                r = log_gift(team, sender, recipient, client_msg_id)
+                recipient_count = recipient_count + r
 
         if recipient_count <= 0:
             return func.HttpResponse ("OK", status_code = 200)    
@@ -174,6 +221,7 @@ def handle_slack_event(auth_token, team, event) -> func.HttpResponse:
             r = post_to_slack_channel (auth_token, f"user {sender} gave away {recipient_count} stroopwafels.", channel)
         return func.HttpResponse (r._body, status_code = r.status)
     else:
+        logging.info(f"Not a stroopwafel message")
         return func.HttpResponse ("OK", status_code = 200)
 
 
@@ -214,12 +262,15 @@ def handle_oauth(code):
 
 
 def get_team_key(team):
-
+    """
+    Obtain an authorization key to use for this team for this session
+    """
     client, coll_string = get_cosmosdb_connection()
 
-    q = f"SELECT c.access_token FROM c WHERE c.team_id = '{team}'"
+    q = f"SELECT c.refresh_token FROM c WHERE c.team_id = '{team}'"
     query = { 'query': q }    
 
+    logging.info(f"query: {q}")
     options = {} 
     options['enableCrossPartitionQuery'] = True
     options['maxItemCount'] = 1
@@ -228,12 +279,36 @@ def get_team_key(team):
     results = list(result_iterable)
 
     if len(results) > 0:
-        auth_key = results[0].get("access_token")
-        logging.info(f"JSON key:{auth_key}")
+        refresh_token = results[0].get("refresh_token")
+        logging.info(f"JSON key:{refresh_token}")
     else:
         error_string = f"Could not find an auth_key for team {team}" 
         logging.error(error_string)
         debug_log_error(error_string)
+        return None
+
+    urllib3.disable_warnings()
+    http = urllib3.PoolManager()
+    logging.info(f"Refreshing token for client: {os.environ['YOSTROOP_OAUTH_CLIENT']}")
+    logging.info(f"Refreshing token using secret: {os.environ['YOSTROOP_OAUTH_SECRET']}")
+    logging.info(f"Refreshing token using secret: {refresh_token}")
+    r = http.request(
+        'POST',
+        'https://slack.com/api/oauth.access',
+        {
+            "client_id": os.environ["YOSTROOP_OAUTH_CLIENT"],
+            "client_secret": os.environ["YOSTROOP_OAUTH_SECRET"],
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token
+        }
+    )        
+
+    if r.status == 200:
+        body = json.loads(r._body)
+        auth_key = body.get("access_token")
+    else:
+        logging.error("Could not refresh token")
+        logging.error(r)
         return None
 
     return auth_key
@@ -252,7 +327,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     """    
 
     logging.info("YoStroop was triggered.")
-    logging.info(f"Debug level = {os.environ['YOSTROOP_DEBUG_LEVEL']}")
+    logging.info(f"YoStroop debug level = {os.environ['YOSTROOP_DEBUG_LEVEL']}")
 
     # Let's see if this was an OAUTH request - if so we handle it
     code = req.params.get("code")
